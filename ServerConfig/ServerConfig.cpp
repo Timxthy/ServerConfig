@@ -2,6 +2,7 @@
 #include <winsock2.h>
 #include <string>
 #include <Ws2tcpip.h>
+#include <thread>
 
 #define SERVER
 class comms
@@ -45,11 +46,8 @@ public:
 
         // Fill in server information
         server.sin_family = AF_INET;
-        iResult = inet_pton(AF_INET, "127.0.0.1", &(server.sin_addr));
-        if (iResult <= 0) {
-            throw std::runtime_error("inet_pton could not be established: " + std::to_string(WSAGetLastError()));
-        }
-        server.sin_port = htons(55555);
+        server.sin_addr.s_addr = INADDR_ANY;
+        server.sin_port = htons(54000);
 
         // Bind socket to server
         iResult = bind(sock, (sockaddr*)&server, sizeof(server));
@@ -62,33 +60,49 @@ public:
         if (iResult == SOCKET_ERROR) {
             throw std::runtime_error("Listen for connection has failed: " + std::to_string(WSAGetLastError()));
         }
+        //Threading
+        while (true) {
+            clientSize = sizeof(client);
+            SOCKET clientSock = accept(sock, (sockaddr*)&client, &clientSize);
+            if (clientSock == INVALID_SOCKET) {
+                throw std::runtime_error("Accept failed: " + std::to_string(WSAGetLastError()));
+            }
+            // Create a separate thread for the client
+            std::thread clientThread(&serverComms::handleClient, this, clientSock);
+            clientThread.detach();
+        }
     }
 
-    char* recvData() override
+    void handleClient(SOCKET clientSock)
     {
-        // Accept a client socket
-        clientSize = sizeof(client);
-        SOCKET clientSock = accept(sock, (sockaddr*)&client, &clientSize);
-        if (clientSock == INVALID_SOCKET) {
-            throw std::runtime_error("Accepting connection failed: " + std::to_string(WSAGetLastError()));
+        // Receive and send data with the client
+        while (true) {
+            char* buffer = recvData(clientSock);
+            if (!buffer) break;
+            sendData(clientSock, buffer);
         }
 
+        // Close the socket and cleanup Winsock
+        closesocket(clientSock);
+    }
+
+    char* recvData(SOCKET clientSock) 
+    {
         // Receive data from the client
         char buffer[256];
         int iResult = recv(clientSock, buffer, 256, 0);
         if (iResult == SOCKET_ERROR) {
-            throw std::runtime_error("Receiving connection failed: " + std::to_string(WSAGetLastError()));
+            throw std::runtime_error("Receive failed: " + std::to_string(WSAGetLastError()));
         }
-
         return buffer;
     }
 
-    void sendData(char* buffer) override
+    void sendData(SOCKET clientSock, char* buffer) 
     {
         // Send data to the client
         int iResult = send(clientSock, buffer, (int)strlen(buffer), 0);
         if (iResult == SOCKET_ERROR) {
-            throw std::runtime_error("Sending failed: " + std::to_string(WSAGetLastError()));
+            throw std::runtime_error("Send failed: " + std::to_string(WSAGetLastError()));
         }
     }
 
@@ -131,9 +145,41 @@ public:
         if (iResult == SOCKET_ERROR) {
             throw std::runtime_error("Connect tto server has failed: " + std::to_string(WSAGetLastError()));
         }
+        // Create a separate thread for the client
+        std::thread clientThread(&clientComms::handleServer, this);
+        clientThread.detach();
     }
 
-    char* recvData() override
+private:
+    void handleServer()
+    {
+        try {
+            // Receive and send data with the server
+            while (true) {
+                char* buffer = recvData();
+                if (!buffer) break;
+                sendData(buffer);
+            }
+        }
+        catch (const std::runtime_error& e) {
+            std::cerr << e.what() << std::endl;
+        }
+        // Close the socket and cleanup
+        closesocket(sock);
+        WSACleanup();
+    
+    }
+
+    void sendData(char* buffer) 
+    {
+        // Send data to the server
+        int iResult = send(sock, buffer, (int)strlen(buffer), 0);
+        if (iResult == SOCKET_ERROR) {
+            throw std::runtime_error("Sending failure: " + std::to_string(WSAGetLastError()));
+        }
+    }
+
+    char* recvData() 
     {
         // Receive data from the server
         char buffer[256];
@@ -144,21 +190,8 @@ public:
         return buffer;
     }
 
-    void sendData(char* buffer) override
-    {
-        // Send data to the server
-        int iResult = send(sock, buffer, (int)strlen(buffer), 0);
-        if (iResult == SOCKET_ERROR) {
-            throw std::runtime_error("Sending failure: " + std::to_string(WSAGetLastError()));
-        }
-    }
+   
 
-    void closeConnection() override
-    {
-        // Close the socket and cleanup Winsock
-        closesocket(sock);
-        WSACleanup();
-    }
 };
 
 int main()
